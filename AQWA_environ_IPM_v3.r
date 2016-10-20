@@ -13,6 +13,10 @@
 # updated 18 Oct 2016 by Steffen Oppel - introduced covariates and added graphical output
 # updated 19 Oct 2016 by Steffen Oppel - introduced immigration and summer rain, and incorporated low count for July counts
 # updated 19 Oct 2016 by Steffen Oppel - changed 'flood' from water level to binary variable (>130 cm water level)
+# updated 20 Oct 2016 by Steffen Oppel - changed 'flood' to >140 cm water level, reduce prior for phij, and made immigration more flexible
+# updated 20 Oct 2016 by Steffen Oppel - tried various approaches to constrain survival and fec - can all be achieved with immigration, but phij always > phia
+
+# NO FURTHER IMPROVEMENT POSSIBLE UNLESS fec AND imm CAN BE DESCRIBED BY SOME ENVIRONMENTAL VARIABLES
 
 
 library(jagsUI)
@@ -71,7 +75,7 @@ NAO<-(NAO-meanNAO)/sdNAO
 #meanflood<-mean(flood, na.rm = TRUE)
 #sdflood<-sd(flood, na.rm = TRUE)
 #flood<-(flood-meanflood)/sdflood
-flood<-ifelse(flood>130,1,2)
+flood<-ifelse(flood>140,1,2)
 flood[is.na(flood)]<-2			### set missing values to normal non-flood year
 
 meanwinrain<-mean(winrain, na.rm = TRUE)
@@ -102,7 +106,7 @@ area<-(area-meanarea)/sdarea
 area[is.na(area)]<-0			### set missing values to mean
 
 
-jags.data <- list(nyears = length(years), y = y, NAO=NAO,flood=flood, fire=fire, inund=inund, winrain=winrain, area=area, rain=rain, count=count)
+jags.data <- list(nyears = length(years), y = y, NAO=NAO,flood=flood, fire=fire, inund=inund, winrain=winrain, rain=rain, count=count, area=area)
 
 
 
@@ -113,7 +117,7 @@ jags.data <- list(nyears = length(years), y = y, NAO=NAO,flood=flood, fire=fire,
 # 
 ##############################################################################
 
-sink("AQWA.IPM.imm.jags")
+sink("AQWA.IPM.imm4.jags")
 cat("
 model {
 
@@ -128,7 +132,7 @@ NadSurv[1] ~ dnorm(60, 0.0001)T(0,)      # Adults >= 2 years
 imm[1]<-0					# set immigration to 0 in first year
 
 # DEMOGRAPHIC PARAMETERS INFORMED BY DATA FROM OTHER STUDIES
-mphij ~ dunif(0.10,0.85)       	# mean juvenile survival, uninformative prior, UPDATE when information becomes available
+mphij ~ dunif(0.10,0.55)       	# mean juvenile survival, uninformative prior, UPDATE when information becomes available
 mphia ~ dunif(0.29,0.785)		# mean adult survival; Dyrcz: apparent survival males 0.67 (95% CI: 0.537-0.785); females 0.42 (0.290-0.563). 
 mfec ~ dunif(1.1,3.7)			# mean fecundity per breeding attempt, derived from Kubacka et al. 2013 by multiplying brood size and nest survival (3.8–4.1)*(0.36-0.87)
 
@@ -168,6 +172,7 @@ for (t in 1:(nyears-1)){
    eps[t] ~ dnorm(0, tau.fec)												# random variation around fecundity
    f[t] <- mfec  + beta.fire*fire[t] + beta.f.rain*rain[t] + eps[t]     				# Productivity per breeding attempt
    nbrood[t] <- nbroods[flood[t]]  											# FIXED TO 1 brood when flood and 2 broods when no flood
+
 }
 
 
@@ -186,12 +191,14 @@ for (t in 1:(nyears-1)){
 #--------------------------------------------
    # 4.1 System process
    for (t in 2:nyears){
-      	chicks[t-1] <- 0.5 * f[t-1] * nbrood[t-1] * Ntotrd[t-1]		## nbroods is avg number of broods per year, f is fecundity per clutch, not per year
+      	chicks[t-1] <- 0.5 * f[t-1] * nbrood[t-1] * Ntot[t-1]		## nbroods is avg number of broods per year, f is fecundity per clutch, not per year
       	chicksrd[t-1] <- round(chicks[t-1])
 		N1[t] ~ dbin(phij[t-1],chicksrd[t-1]) 
-		NadSurv[t] ~ dbin(phia[t-1],Ntotrd[t-1])
-   		log(imm.offset[t]) <- (beta.imm*area[t])*(flood[t]-1)					# IMMIGRATION SCALES TO AVAILABLE AREA and is only available in non-flood years
-		imm[t]~dpois(imm.offset[t]) 									# number of immigrants, will equal 0 in flood years
+		NadSurv[t] ~ dbin(phia[t-1],round(Ntot[t-1]))
+   		#log(imm.offset[t]) <- (beta.imm*area[t])*(flood[t]-1)			# IMMIGRATION SCALES TO AVAILABLE AREA and is only available in non-flood years
+		#imm[t]~dpois(imm.offset[t]) 								# number of immigrants, will equal 0 in flood years
+		imm.offset[t]~dunif(0,200) 								# annually varying number of immigrant
+		imm[t]<-imm.offset[t]*(beta.imm*area[t])*(flood[t]-1)				# number of immigrants scaled to available area, will equal 0 in flood years
 	}
 
    # 4.2 Observation process
@@ -211,7 +218,7 @@ sink()
 # Initial values
 inits <- function(){list(
 nbroods= c(runif(1, 0,1),runif(1, 1.2,2)),
-mphij = runif(1, 0.10,0.85),
+mphij = runif(1, 0.10,0.55),
 mphia = runif(1, 0.29,0.785),
 mfec = runif(1, 1.1,3.7))}
 
@@ -228,7 +235,7 @@ nc <- 4
 
  
 # Call JAGS from R
-ipm.model <- jags(jags.data, inits, parameters, "A:\\RSPB\\AquaticWarbler\\Analysis\\AQWA.IPM.imm.jags", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, n.cores=nc, parallel=T)
+ipm.model <- jags(jags.data, inits, parameters, "A:\\RSPB\\AquaticWarbler\\Analysis\\AQWA.IPM.imm4.jags", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, n.cores=nc, parallel=T)
 
 
 
@@ -239,7 +246,7 @@ ipm.model <- jags(jags.data, inits, parameters, "A:\\RSPB\\AquaticWarbler\\Analy
 # 
 ##############################################################################
 print(ipm.model, dig=3)
-write.table(ipm.model$summary, "AQWA_HU_Output_table_v3.csv", sep=",")
+write.table(ipm.model$summary, "AQWA_HU_Output_table_v4.csv", sep=",")
 
 
 
@@ -252,7 +259,7 @@ write.table(ipm.model$summary, "AQWA_HU_Output_table_v3.csv", sep=",")
 nyears = length(years)
 
 
-pdf("AQWA_Hungary_model_output_v3.pdf", width=13, height=10)
+pdf("AQWA_Hungary_model_output_v4.pdf", width=13, height=10)
 
 par(mfrow=c(2,2), mar=c(4,5,0,0),oma=c(0,0,0,0))
 
@@ -326,13 +333,13 @@ dev.off()
 # 
 ##############################################################################
 
-pdf("AQWA_Hungary_effect_sizes_v3.pdf", width=9, height=7)
+pdf("AQWA_Hungary_effect_sizes_v4.pdf", width=9, height=7)
 
 par(mar=c(3,5,0,1),oma=c(0,0,0,0))
-plot(ipm.model $summary[172:177,1], ylim = c(-3, 8), ylab = "Mean effect size", xlab = "", las = 1, pch = 16, frame = F, cex = 1.5, axes=F, main="", cex.lab=1.5, col='blue')
+plot(ipm.model $summary[172:177,1], ylim = c(-3, 3), ylab = "Mean effect size", xlab = "", las = 1, pch = 16, frame = F, cex = 1.5, axes=F, main="", cex.lab=1.5, col='blue')
 segments(1:6, ipm.model $summary[172:177,3], 1:6, ipm.model $summary[172:177,7], col="black")
 axis(1, at=c(1:6), labels=c("NAO","immigration","rain.fec","fire","inund","win.rain"), cex.axis=1.2)
-axis(2, at=seq(-3,8,1), labels=T, las=1, cex.axis=1.3)
+axis(2, at=seq(-3,3,1), labels=T, las=1, cex.axis=1.3)
 abline(h=0, lty=2)
 
 dev.off()
@@ -375,7 +382,7 @@ pr.upper[i]<-quantile(ipm.model $sims.list$f[,i], 0.975)}
 
 
 
-pdf("AQWA_Hungary_lambda_correlations_v3.pdf", width=9, height=9)
+pdf("AQWA_Hungary_lambda_correlations_v4.pdf", width=9, height=9)
 
 par(mfrow=c(2,2), mar=c(4,5,0,0),oma=c(0,0,0,0))
 
